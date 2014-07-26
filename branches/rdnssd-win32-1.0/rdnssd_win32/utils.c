@@ -58,3 +58,26 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp)
     tp->tv_nsec = tv.tv_usec * 1000;
     return 0;
 }
+
+int is_run_as_administrator(void)
+{
+	int ret = 0;
+	PSID adminGrp = NULL;
+	SID_IDENTIFIER_AUTHORITY sidAuth = SECURITY_NT_AUTHORITY;
+
+	if (!AllocateAndInitializeSid(&sidAuth, 2, SECURITY_BUILTIN_DOMAIN_RID,
+		DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &adminGrp))
+	{
+		/* error */
+		return 0;
+	}
+
+	if (!CheckTokenMembership(NULL, adminGrp, &ret))
+	{
+		ret = 0;
+	}
+
+	FreeSid(adminGrp);
+
+	return ret;
+}

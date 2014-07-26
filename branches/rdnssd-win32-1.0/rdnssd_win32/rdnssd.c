@@ -175,7 +175,7 @@ static void rdnssd_write_registry(struct socket_desc* sock)
 		&bufsize);
 
 	/* in case it failed, buf is zeroed string */
-	fprintf(stdout, "Old value is %s\n", buf);
+	fprintf(stdout, "Current registry value is %s\n", buf);
 
 	memcpy(old, buf, sizeof(buf));
 
@@ -189,6 +189,8 @@ static void rdnssd_write_registry(struct socket_desc* sock)
 
         inet_ntop(AF_INET6, &rd->addr, str, INET6_ADDRSTRLEN);
 		str_len = (DWORD)strlen(str);
+
+		fprintf(stdout, "New entry: %s\n", str);
 
         if((str_len + 1) > bufsize)
         {
@@ -208,17 +210,18 @@ static void rdnssd_write_registry(struct socket_desc* sock)
             *buf2 = 0x00;
         }
 
-	    buf[sizeof(buf) - bufsize] = 0x00;
-		fprintf(stdout, "New value is %s\n", buf);
 		bufsize = (DWORD)strlen(buf);
-
-		if(!strncmp(buf, old, bufsize))
-		{
-			fprintf(stdout, "Same value, don't update\n");
-			continue;
-		}
     }   
 	
+	buf[sizeof(buf) - 1] = 0x00;
+
+	fprintf(stdout, "Old=%s New=%s\n", buf, old);
+	if (!strncmp(buf, old, bufsize))
+	{
+		fprintf(stdout, "Same value, don't update\n");
+		return;
+	}
+
 	/* write the value */
 	if(RegSetValueExA(key, "NameServer", 0, REG_SZ, (unsigned char*)buf,
 		bufsize) != ERROR_SUCCESS)
@@ -326,18 +329,6 @@ static void rdnssd_update(struct socket_desc* sock, struct in6_addr* addr,
     qsort(sock->servers.list, sock->servers.count, sizeof(rdnss_t),
 		rdnssd_is_older);
 	fprintf(stdout, "update done\n");
-    /*
-    #ifndef NDEBUG
-        for(unsigned i = 0; i < g_rdnssd.servers.count; i++)
-        {
-            char buf[INET6_ADDRSTRLEN];
-            inet_ntop(AF_INET6, &g_rdnssd.servers.list[i].addr, buf,
-                       sizeof(buf));
-            syslog(LOG_DEBUG, "%u: %48s expires at %u\n", i, buf,
-                    (unsigned int)g_rdnssd.servers.list[i].expiry);
-        }
-    #endif
-    */
 }
 
 /**
@@ -481,6 +472,7 @@ static int rdnssd_main()
 	{
 		list_iterate_safe(get, n, &g_rdnssd.sockets)
 		{
+	
 			struct socket_desc* tmp = list_get(get, struct socket_desc, list);
 
 			if(FD_ISSET(tmp->sock, &fdsr))
@@ -731,6 +723,13 @@ VOID WINAPI rdnssd_service(int argc, char** argv)
  */
 int main(int argc, char** argv)
 {
+	/* ensure the application is running with full privileges */
+	if (is_run_as_administrator() == 0)
+	{
+		fprintf(stdout, "Run this application as administrator. Exiting...\n");
+		exit(EXIT_FAILURE);
+	}
+
     /* signals handling */
 
     /* On Windows x64, it is normal that the following

@@ -64,4 +64,10 @@ int gettimeofday(struct timeval* p, void* tz);
  */
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
 
+/**
+ * \brief Returns whether or not the code is run as administrator.
+ * \return 1 if run as administrator, 0 otherwise.
+ */
+int is_run_as_administrator(void);
+
 #endif
