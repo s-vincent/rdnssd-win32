@@ -215,7 +215,7 @@ static void rdnssd_write_registry(struct socket_desc* sock)
 	
 	buf[sizeof(buf) - 1] = 0x00;
 
-	fprintf(stdout, "Old=%s New=%s\n", buf, old);
+	fprintf(stdout, "Old=%s New=%s\n", old, buf);
 	if (!strncmp(buf, old, bufsize))
 	{
 		fprintf(stdout, "Same value, don't update\n");
@@ -296,7 +296,7 @@ static void rdnssd_update(struct socket_desc* sock, struct in6_addr* addr,
     /* Does this entry already exist? */
     for(i = 0 ; i < sock->servers.count ; i++)
     {
-        if(memcmp(&sock->addr, &sock->servers.list[i].addr,
+        if(memcmp(addr, &sock->servers.list[i].addr,
 			sizeof(struct in6_addr)) == 0 && 
 				(!IN6_IS_ADDR_LINKLOCAL(&sock->addr) || 
 					ifindex == sock->servers.list[i].ifindex))
@@ -328,7 +328,7 @@ static void rdnssd_update(struct socket_desc* sock, struct in6_addr* addr,
 
     qsort(sock->servers.list, sock->servers.count, sizeof(rdnss_t),
 		rdnssd_is_older);
-	fprintf(stdout, "update done\n");
+	fprintf(stdout, "Update done\n");
 }
 
 /**
