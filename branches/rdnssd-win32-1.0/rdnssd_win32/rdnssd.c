@@ -136,9 +136,9 @@ static void rdnssd_write_registry(struct socket_desc* sock)
 {
     HKEY key;
     char registry_key[sizeof(KEY_STR) + 64];
-    char old[1024];
+    char old[17 * INET6_ADDRSTRLEN];
     char str[INET6_ADDRSTRLEN];
-    char buf[1024];
+	char buf[17 * INET6_ADDRSTRLEN];
     char* buf2 = NULL;
     DWORD bufsize = 0;
 
@@ -187,6 +187,11 @@ static void rdnssd_write_registry(struct socket_desc* sock)
 		struct rdnss_t* rd = &sock->servers.list[i];
 		DWORD str_len = 0;
 
+		if (rd->expiry == 0)
+		{
+			continue;
+		}
+
         inet_ntop(AF_INET6, &rd->addr, str, INET6_ADDRSTRLEN);
 		str_len = (DWORD)strlen(str);
 
@@ -211,7 +216,7 @@ static void rdnssd_write_registry(struct socket_desc* sock)
         }
 
 		bufsize = (DWORD)strlen(buf);
-    }   
+    }
 	
 	buf[sizeof(buf) - 1] = 0x00;
 
@@ -308,6 +313,12 @@ static void rdnssd_update(struct socket_desc* sock, struct in6_addr* addr,
     /* Add a new entry */
     if(i == sock->servers.count)
     {
+		/* try to add an expired ones that do not belongs to our list */
+		if (expiry == 0)
+		{
+			return;
+		}
+
         if(sock->servers.count < MAX_RDNSS)
 		{
             i = sock->servers.count++;
@@ -318,6 +329,10 @@ static void rdnssd_update(struct socket_desc* sock, struct in6_addr* addr,
             if((expiry - sock->servers.list[MAX_RDNSS - 1].expiry) >= 0)
 			{
                 i = MAX_RDNSS - 1;
+			}
+			else
+			{
+				return;
 			}
         }
     }
@@ -384,7 +399,7 @@ int rdnssd_parse_nd_opts(struct socket_desc* sock,
         for(addr = (struct in6_addr*)(rdnss_opt + 1) ; nd_opt_len >= 2 ; 
 			addr++, nd_opt_len -= 2)
         {
-			if(lifetime > now)
+			if(lifetime > now || lifetime == 0)
 			{
 				rdnssd_update(sock, addr, ifindex, lifetime);
 			}
@@ -472,7 +487,6 @@ static int rdnssd_main()
 	{
 		list_iterate_safe(get, n, &g_rdnssd.sockets)
 		{
-	
 			struct socket_desc* tmp = list_get(get, struct socket_desc, list);
 
 			if(FD_ISSET(tmp->sock, &fdsr))
@@ -510,43 +524,42 @@ static int rdnssd_main()
 }
 
 /**
- * \brief Windows service controller.
- * \param Opcode opcode received
- * \param EventType event type received
- * \param pEventData auxiliary data
- * \param pContext context
- * \return ERROR_SUCCCESS
+ * \brief Monitor current entries and delete expired entries.
  */
-DWORD WINAPI ctrl_handler(DWORD Opcode, DWORD EventType, PVOID pEventData,
-	PVOID pContext)
+static void rdnssd_monitor_entries(void)
 {
-    /* avoid compilation warnings */
-    pContext = pContext;
-    pEventData = pEventData;
-    EventType = EventType;
+	struct list_head* n = NULL;
+	struct list_head* get = NULL;
+	
+	/* close all sockets and do other cleanup */
+	list_iterate_safe(get, n, &g_rdnssd.sockets)
+	{
+		struct socket_desc* sock = list_get(get, struct socket_desc, list);
+		int expired = 0;
 
-    switch(Opcode)
-    {
-	case SERVICE_CONTROL_SHUTDOWN:
-    case SERVICE_CONTROL_STOP:
-		/* break main loop */
-		g_run = 0;
-        g_service_status.dwWin32ExitCode = ERROR_SUCCESS;
-        g_service_status.dwCurrentState = SERVICE_STOPPED;
-        g_service_status.dwCheckPoint= 1;
-        g_service_status.dwWaitHint = 10000;
-        break;
-    default:
-        break;
-    }
+		for (unsigned int i = 0; i < sock->servers.count; i++)
+		{
+			struct rdnss_t* rd = &sock->servers.list[i];
+			struct timespec ts;
+			time_t now;
 
-    if(!SetServiceStatus(g_status, &g_service_status))
-    {
-        /* SvcDebugOut(TEXT("SetServiceStatus error - "), 
-			GetLastError());
-		*/
-    }
-    return ERROR_SUCCESS;
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			now = ts.tv_sec;
+
+			if (rd->expiry < now)
+			{
+				/* expired */
+				rd->expiry = 0;
+				expired = 1;
+			}
+		}
+
+		/* update registry if at least one entry expired */
+		if (expired)
+		{
+			rdnssd_write_registry(sock);
+		}
+	}
 }
 
 /**
@@ -669,6 +682,46 @@ static void rdnssd_cleanup(void)
 }
 
 /**
+* \brief Windows service controller.
+* \param Opcode opcode received
+* \param EventType event type received
+* \param pEventData auxiliary data
+* \param pContext context
+* \return ERROR_SUCCCESS
+*/
+DWORD WINAPI ctrl_handler(DWORD Opcode, DWORD EventType, PVOID pEventData,
+	PVOID pContext)
+{
+	/* avoid compilation warnings */
+	pContext = pContext;
+	pEventData = pEventData;
+	EventType = EventType;
+
+	switch (Opcode)
+	{
+	case SERVICE_CONTROL_SHUTDOWN:
+	case SERVICE_CONTROL_STOP:
+		/* break main loop */
+		g_run = 0;
+		g_service_status.dwWin32ExitCode = ERROR_SUCCESS;
+		g_service_status.dwCurrentState = SERVICE_STOPPED;
+		g_service_status.dwCheckPoint = 1;
+		g_service_status.dwWaitHint = 10000;
+		break;
+	default:
+		break;
+	}
+
+	if (!SetServiceStatus(g_status, &g_service_status))
+	{
+		/* SvcDebugOut(TEXT("SetServiceStatus error - "),
+		GetLastError());
+		*/
+	}
+	return ERROR_SUCCESS;
+}
+
+/**
  * \brief The rdnssd service entry point.
  * \param argc number of arguments
  * \param argv array of arguments
@@ -710,6 +763,7 @@ VOID WINAPI rdnssd_service(int argc, char** argv)
     {
         /* main loop to capture the packet */
 		rdnssd_main();
+		rdnssd_monitor_entries();
     }
     
 	rdnssd_cleanup();
@@ -784,6 +838,7 @@ int main(int argc, char** argv)
 		while(g_run)
 		{
 			rdnssd_main();
+			rdnssd_monitor_entries();
 		}
 
 		g_run = 0;
